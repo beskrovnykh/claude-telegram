@@ -1,0 +1,76 @@
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { v5 as uuidv5, v4 as uuidv4 } from "uuid";
+
+const NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+type SessionMap = Record<string, string>;
+
+export class SessionStore {
+  private filePath: string;
+  private sessions: SessionMap;
+
+  constructor(workspace: string) {
+    const dataDir = join(workspace, "data", ".claude-telegram");
+    this.filePath = join(dataDir, "sessions.json");
+
+    if (!existsSync(dataDir)) {
+      mkdirSync(dataDir, { recursive: true });
+    }
+
+    this.sessions = this.load();
+  }
+
+  private load(): SessionMap {
+    try {
+      if (existsSync(this.filePath)) {
+        return JSON.parse(readFileSync(this.filePath, "utf-8"));
+      }
+    } catch {
+      // Corrupted file — start fresh
+    }
+    return {};
+  }
+
+  private save(): void {
+    writeFileSync(this.filePath, JSON.stringify(this.sessions, null, 2) + "\n");
+  }
+
+  /**
+   * Get or create a session ID for a user.
+   * Returns { sessionId, isNew } where isNew indicates first message.
+   */
+  getSession(userId: number): { sessionId: string; isNew: boolean } {
+    const key = String(userId);
+    const existing = this.sessions[key];
+
+    if (existing) {
+      return { sessionId: existing, isNew: false };
+    }
+
+    // Deterministic first session ID
+    const sessionId = uuidv5(key, NAMESPACE);
+    this.sessions[key] = sessionId;
+    this.save();
+    return { sessionId, isNew: true };
+  }
+
+  /**
+   * Reset session for a user (generates new random UUID).
+   */
+  resetSession(userId: number): string {
+    const key = String(userId);
+    const sessionId = uuidv4();
+    this.sessions[key] = sessionId;
+    this.save();
+    return sessionId;
+  }
+
+  /**
+   * Mark a session as needing a fresh start (e.g., after resume failure).
+   * Replaces the session with a new random UUID.
+   */
+  refreshSession(userId: number): string {
+    return this.resetSession(userId);
+  }
+}
