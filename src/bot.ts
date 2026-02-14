@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { Bot, type Context } from "grammy";
-import type { BotConfig } from "./types.js";
+import type { BotConfig, ClaudeResult } from "./types.js";
 import { SessionStore } from "./session.js";
 import { runClaude } from "./claude.js";
 import { createActivityStatus } from "./activity.js";
@@ -105,6 +105,61 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     await ctx.reply(helpText);
   });
 
+  async function runBeforeClaudeHooks(
+    ctx: Context,
+    message: string
+  ): Promise<
+    { allowed: true; message: string } | { allowed: false; reply?: string }
+  > {
+    let current = message;
+
+    for (const mod of modules) {
+      if (!mod.beforeClaude) continue;
+      try {
+        const res = await mod.beforeClaude(ctx, current);
+        if (!res) continue;
+
+        if (res.action === "deny") {
+          return { allowed: false, reply: res.reply };
+        }
+
+        if (res.action === "continue" && typeof res.message === "string") {
+          current = res.message;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          allowed: false,
+          reply: `Module "${mod.name}" failed: ${msg.slice(0, 300)}`,
+        };
+      }
+    }
+
+    return { allowed: true, message: current };
+  }
+
+  async function runAfterClaudeHooks(
+    ctx: Context,
+    result: ClaudeResult
+  ): Promise<ClaudeResult> {
+    let current = result;
+
+    for (const mod of modules) {
+      if (!mod.afterClaude) continue;
+      try {
+        const next = await mod.afterClaude(ctx, current);
+        if (next) current = next;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[claude-telegram] Module "${mod.name}" afterClaude() failed: ${msg}`
+        );
+      }
+    }
+
+    return current;
+  }
+
   async function dispatchToClaude(ctx: Context, message: string): Promise<void> {
     const userId = ctx.from?.id;
     const chatId = ctx.chat?.id;
@@ -121,6 +176,26 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     }
 
     busy.add(userId);
+
+    // Give modules a chance to deny/transform the message before starting Claude.
+    const before = await runBeforeClaudeHooks(ctx, message);
+    if (!before.allowed) {
+      if (before.reply) {
+        try {
+          await ctx.reply(before.reply);
+        } catch {
+          // Ignore
+        }
+      }
+      busy.delete(userId);
+      return;
+    }
+
+    const finalMessage = before.message;
+    if (!finalMessage || !finalMessage.trim()) {
+      busy.delete(userId);
+      return;
+    }
 
     // Send placeholder message
     let statusMsg;
@@ -146,7 +221,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         config,
         sessionStore,
         userId,
-        message,
+        message: finalMessage,
         onEvent: activity.onEvent,
       });
 
@@ -177,13 +252,15 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         return;
       }
 
-      if (result.success && result.output) {
-        await sendMessage(ctx, result.output);
-      } else if (result.success && !result.output) {
+      const finalResult = await runAfterClaudeHooks(ctx, result);
+
+      if (finalResult.success && finalResult.output) {
+        await sendMessage(ctx, finalResult.output);
+      } else if (finalResult.success && !finalResult.output) {
         await ctx.reply("(empty response)");
       } else {
-        const errorMsg = result.error
-          ? `Error: ${result.error.slice(0, 300)}`
+        const errorMsg = finalResult.error
+          ? `Error: ${finalResult.error.slice(0, 300)}`
           : "Unknown error occurred.";
         await ctx.reply(errorMsg);
       }

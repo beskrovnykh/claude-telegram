@@ -4,28 +4,17 @@ A simple and modular Telegram orchestrator on top of Claude Code CLI.
 
 One npm package that connects a Telegram bot to Claude Code via `--resume` sessions, with whitelist access control and live activity status.
 
-## Why not OpenClaw (and why you shouldn't either)
+## claude-telegram vs OpenClaw
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an open-source personal AI assistant with Telegram, Discord, Slack and 50+ integrations. A great starting point.
+| | claude-telegram | [OpenClaw](https://github.com/openclaw/openclaw) |
+|---|---|---|
+| Core | ~1500 LOC, one dependency (grammY) | 50+ integrations, large codebase |
+| Approach | Minimal orchestrator — Claude Code does the work | Full-featured AI assistant platform |
+| Extensibility | Module system — add anything you need | Built-in, growing feature set |
+| Control | You own the code, easy to audit and modify | Community-driven, fast-moving |
+| Setup | `npx claude-telegram start` | Multi-step setup |
 
-**Some numbers**: over the last 7 days, OpenClaw's main branch received an average of 90 commits per day. On the peak day — 67,000 lines of code.
-
-This is a massive success in terms of turning ideas into reality and shipping progress. But it's maximally unstable for a system you want to trust with your life.
-
-Ask yourself:
-- Do I know what changes are landing there?
-- What will land next week?
-- What's the goal, and how aligned are all the contributors to that goal?
-- Do I need all those features?
-- How do I add my own changes, and are they aligned with the rest of the system?
-
-It's fine that there are no answers right now — not from you, not from OpenClaw. These are growing pains of a young project, and some of them will definitely get fixed.
-
-**This project takes a different approach.** claude-telegram has been in development for several months as its own orchestration system. Instead of competing with OpenClaw head-on, the best mechanics and architectures were taken from their repo and made part of this system — while keeping control. A daily task monitors OpenClaw updates to continuously adopt the best ideas.
-
-**The philosophy**: we live in a world where the cost of replication approaches zero. The most effective strategy is not to be the innovator who invests in finding solutions, but to quickly find and adopt others' best practices into your own system that you control.
-
-OpenClaw is a great starting point, and it's perfectly fine to begin there with all due precautions. But: too large a repo, unclear who, unclear where.
+> Both are valid choices. claude-telegram is for those who prefer a small, predictable core that they extend themselves.
 
 ## Installation
 
@@ -186,6 +175,47 @@ export default function createModule() {
 }
 ```
 
+### Hooks (memory, security, post-processing)
+
+Modules can also hook into the request pipeline:
+
+- `beforeClaude(ctx, message)` — deny or transform the user's message before it is sent to Claude
+- `afterClaude(ctx, result)` — observe/transform Claude result before it is sent back to Telegram
+
+Security example (deny messages containing a secret keyword):
+
+```js
+export default function createModule() {
+  return {
+    name: "security",
+    async beforeClaude(ctx, message) {
+      if (message.includes("OPENAI_API_KEY")) {
+        return { action: "deny", reply: "Denied: looks like a secret." };
+      }
+      return { action: "continue" };
+    },
+  };
+}
+```
+
+Memory-ish example (prepend extra context):
+
+```js
+export default function createModule() {
+  return {
+    name: "memory",
+    async beforeClaude(ctx, message) {
+      const extraContext = "Context: you are talking to the same user as before.";
+      return { action: "continue", message: `${extraContext}\n\n${message}` };
+    },
+    async afterClaude(ctx, result) {
+      // Store result.output somewhere if you want (file/db/vector store).
+      return result;
+    },
+  };
+}
+```
+
 ## CLI
 
 ```bash
@@ -245,6 +275,8 @@ This is intentionally minimal. Not included:
 - Budget tracking
 - Web dashboard
 - Queue system (one message at a time, extras are rejected)
+
+Any of these can be added as a [module](#modules) without touching the core.
 
 ## License
 
