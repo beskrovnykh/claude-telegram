@@ -18,6 +18,7 @@ function buildHelpText(modules: BotModule[]): string {
     "Send me any text message to chat with Claude.\n",
     "/cancel — stop current request",
     "/clear — start a new conversation",
+    "/reload — reload modules",
     "/help — show this message",
   ];
 
@@ -39,8 +40,8 @@ function buildHelpText(modules: BotModule[]): string {
 export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bot {
   const bot = new Bot(config.token);
   const sessionStore = new SessionStore(config.workspace);
-  const modules = options.modules ?? [];
-  const helpText = buildHelpText(modules);
+  let modules = options.modules ?? [];
+  let helpText = buildHelpText(modules);
 
   // Track which users currently have a running Claude process
   const busy = new Set<number>();
@@ -301,6 +302,52 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
       throw new Error(`Module "${mod.name}" register() failed: ${msg}`);
     }
   }
+
+  async function reloadModules(): Promise<string[]> {
+    if (busy.size > 0) {
+      throw new Error("Cannot reload while requests are in progress.");
+    }
+
+    // Dispose old modules (reverse order).
+    for (const mod of [...modules].reverse()) {
+      if (!mod.dispose) continue;
+      try {
+        await mod.dispose();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[claude-telegram] Module "${mod.name}" dispose() failed: ${msg}`
+        );
+      }
+    }
+
+    // Load fresh modules.
+    const fresh = await loadModules(config);
+
+    // Init fresh modules.
+    const freshCtx: ModuleContext = { bot, config, sessionStore, dispatchToClaude };
+    for (const mod of fresh) {
+      if (!mod.init) continue;
+      await mod.init(freshCtx);
+    }
+
+    modules = fresh;
+    helpText = buildHelpText(modules);
+
+    return fresh.map((m) => m.name);
+  }
+
+  bot.command("reload", async (ctx) => {
+    try {
+      const names = await reloadModules();
+      await ctx.reply(
+        `Reloaded: ${names.join(", ") || "(none)"}\n\nNote: new commands require bot restart.`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await ctx.reply(`Reload failed: ${msg}`);
+    }
+  });
 
   bot.command("cancel", async (ctx) => {
     const userId = ctx.from?.id;

@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import { readdirSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { Bot, Context } from "grammy";
 import type { SessionStore } from "./session.js";
@@ -127,10 +128,60 @@ async function instantiateModule(
 }
 
 /**
+ * Expand module specs: if a spec points to a directory, scan it for .mjs/.js files.
+ */
+function expandModuleSpecs(config: BotConfig): ModuleConfig[] {
+  const specs = config.modules ?? [];
+  const expanded: ModuleConfig[] = [];
+
+  for (const spec of specs) {
+    const importSpec = typeof spec === "string" ? spec : spec.import;
+
+    // Only expand file-like specifiers (not package names).
+    if (!isFileLikeSpecifier(importSpec)) {
+      expanded.push(spec);
+      continue;
+    }
+
+    const abs = resolvePath(config.workspace, importSpec);
+    let isDir = false;
+    try {
+      isDir = statSync(abs).isDirectory();
+    } catch {
+      // Not a directory (or doesn't exist) — keep as-is, let instantiate handle the error.
+      expanded.push(spec);
+      continue;
+    }
+
+    if (!isDir) {
+      expanded.push(spec);
+      continue;
+    }
+
+    // Scan directory for module files.
+    const files = readdirSync(abs)
+      .filter((f) => f.endsWith(".mjs") || f.endsWith(".js"))
+      .sort();
+
+    for (const file of files) {
+      const filePath = resolvePath(abs, file);
+      if (typeof spec === "string") {
+        expanded.push(filePath);
+      } else {
+        // Propagate options/enabled from the directory spec to each file.
+        expanded.push({ ...spec, import: filePath });
+      }
+    }
+  }
+
+  return expanded;
+}
+
+/**
  * Load modules from config. Relative file paths are resolved against `config.workspace`.
  */
 export async function loadModules(config: BotConfig): Promise<BotModule[]> {
-  const specs = config.modules ?? [];
+  const specs = expandModuleSpecs(config);
   if (specs.length === 0) return [];
 
   const enabledSpecs = specs.filter((s) => {

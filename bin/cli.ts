@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { loadConfig } from "../src/config.js";
 import { startBot } from "../src/bot.js";
+import { runInit } from "../src/init.js";
 import { Bot } from "grammy";
 
 const args = process.argv.slice(2);
@@ -21,12 +22,12 @@ async function cmdStart() {
   await startBot(config);
 }
 
-function cmdCheck() {
+function runCheck(configPath?: string): void {
   console.log("[check] Validating config...");
 
   let config;
   try {
-    config = loadConfig(getConfigPath());
+    config = loadConfig(configPath);
     console.log(`  ✓ Config loaded`);
     console.log(`  ✓ Workspace: ${config.workspace}`);
     console.log(
@@ -76,6 +77,15 @@ function cmdCheck() {
   }
 
   console.log("\nAll checks passed.");
+}
+
+function cmdCheck() {
+  runCheck(getConfigPath());
+}
+
+async function cmdInit() {
+  const target = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+  await runInit(target);
 }
 
 async function cmdWhoami() {
@@ -139,6 +149,13 @@ switch (command) {
     });
     break;
 
+  case "init":
+    cmdInit().catch((err) => {
+      console.error("Fatal:", err instanceof Error ? err.message : err);
+      process.exit(1);
+    });
+    break;
+
   case "check":
     cmdCheck();
     break;
@@ -154,9 +171,10 @@ switch (command) {
     console.log(`claude-telegram — Telegram bot for Claude Code CLI
 
 Usage:
-  claude-telegram start [--config path]   Start the bot
-  claude-telegram check [--config path]   Validate config & dependencies
-  claude-telegram whoami                  Get your Telegram user ID
+  claude-telegram init [directory]       Create a new workspace with config & examples
+  claude-telegram start [--config path]  Start the bot
+  claude-telegram check [--config path]  Validate config & dependencies
+  claude-telegram whoami                 Get your Telegram user ID
 `);
     if (command && command !== "help" && command !== "--help") {
       process.exit(1);
