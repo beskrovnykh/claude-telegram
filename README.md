@@ -86,6 +86,10 @@ permission_mode: acceptEdits
 # add_dirs:                             # additional dirs for Claude
 #   - /path/to/shared/data
 #
+# --- Optional: multi-instance ---
+# session_namespace: my-bot               # unique seed for session IDs (required when
+#                                         # multiple bots share the same whitelist user)
+#
 # --- Optional: security/capabilities (advanced) ---
 # disable_slash_commands: true            # disable Claude Code "skills" (slash commands)
 # setting_sources: ["user", "project"]    # ignore local settings in workspace (".claude/settings.local.json")
@@ -154,6 +158,7 @@ token: ${RESEARCHER_BOT_TOKEN}
 workspace: ./research-pipeline
 whitelist: [YOUR_USER_ID]
 permission_mode: acceptEdits
+session_namespace: researcher
 timeout: 600
 system_prompt: "You are a research agent. Be thorough and cite sources."
 add_dirs:
@@ -166,6 +171,7 @@ token: ${ASSISTANT_BOT_TOKEN}
 workspace: ./assistant
 whitelist: [YOUR_USER_ID]
 permission_mode: acceptEdits
+session_namespace: assistant
 ```
 
 ```bash
@@ -174,6 +180,8 @@ npx claude-telegram start --config assistant.yaml
 ```
 
 Each bot gets its own workspace, sessions, and Telegram token. They share nothing unless you explicitly use `add_dirs`.
+
+> **Important:** If two bots share the same user in their `whitelist`, add a unique `session_namespace` to each. Without it, both bots generate the same deterministic session ID for that user, causing "session already in use" errors.
 
 ## Modules
 
