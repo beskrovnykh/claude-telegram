@@ -303,13 +303,11 @@ This is intentionally minimal. Not included:
 
 Any of these can be added as a [module](#modules) without touching the core.
 
-## Security Hardening Backlog (No Docker)
+## Security
 
-1. Output DLP before sending to Telegram (token/key redaction + entropy filter).
-2. Filter `env` passed to `spawn()` (currently forwards all of `process.env` in `src/claude.ts`).
-3. Audit log: append-only log for tool usage/commands (and approval decisions if added later).
-4. Module policy: allowlist packages + deny absolute paths / `file:` by default (`src/modules.ts`).
-5. Reconsider default `permission_mode` (currently defaults to `acceptEdits` in `src/config.ts`).
+Basic security is built into the core — whitelist, permission modes, tool restrictions, MCP lockdown, error sanitization. See [SECURITY.md](SECURITY.md) for details.
+
+For advanced security (sandboxing, DLP, audit logging, and more), check out **[Radius](https://github.com/bluzir/radius)**.
 
 ## License
 
