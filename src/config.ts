@@ -48,6 +48,8 @@ const configSchema = z.object({
     )
     .optional(),
   session_namespace: z.string().optional(),
+  allow_groups: z.boolean().optional(),
+  topic_id: z.number().optional(),
 });
 
 /**
@@ -129,5 +131,7 @@ export function loadConfig(configPath?: string): BotConfig {
     strictMcpConfig: validated.strict_mcp_config,
     mcpConfig: validated.mcp_config,
     sessionNamespace: validated.session_namespace,
+    allowGroups: validated.allow_groups,
+    topicId: validated.topic_id,
   };
 }

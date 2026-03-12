@@ -56,6 +56,12 @@ function buildHelpText(modules: BotModule[]): string {
   return lines.join("\n");
 }
 
+/** Build reply options that preserve forum topic context. */
+function topicParams(ctx: Context): { message_thread_id?: number } {
+  const id = ctx.message?.message_thread_id;
+  return id ? { message_thread_id: id } : {};
+}
+
 /**
  * Create and configure a Grammy bot connected to Claude CLI.
  */
@@ -83,13 +89,13 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     console.error("[claude-telegram] Bot error:", err.error);
   });
 
-  // --- Middleware: private chat only ---
+  // --- Middleware: chat type filter ---
   bot.use(async (ctx, next) => {
     if (!ctx.chat) return;
-    if (ctx.chat.type !== "private") {
+    if (ctx.chat.type !== "private" && !config.allowGroups) {
       try {
         if (ctx.message) {
-          await ctx.reply("Please message me in a private chat.");
+          await ctx.reply("Please message me in a private chat.", topicParams(ctx));
         }
       } catch {
         // Ignore reply failures.
@@ -98,6 +104,18 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     }
     await next();
   });
+
+  // --- Middleware: topic filter ---
+  // When topic_id is configured, only respond to messages in that specific forum topic.
+  // Messages in other topics are silently ignored so other bots can handle them.
+  if (config.topicId) {
+    bot.use(async (ctx, next) => {
+      if (ctx.chat?.type !== "private") {
+        if (ctx.message?.message_thread_id !== config.topicId) return;
+      }
+      await next();
+    });
+  }
 
   // --- Middleware: whitelist ---
   bot.use(async (ctx, next) => {
@@ -109,7 +127,8 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
       if (ctx.chat) {
         try {
           await ctx.reply(
-            `Sorry, you don't have access to this bot. Ask the owner to add your user ID to the whitelist.\n\nYour ID: ${userId}`
+            `Sorry, you don't have access to this bot. Ask the owner to add your user ID to the whitelist.\n\nYour ID: ${userId}`,
+            topicParams(ctx)
           );
         } catch {
           // Ignore reply failures for non-message updates.
@@ -122,15 +141,25 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
   });
 
   // --- Commands ---
+  bot.command("topicid", async (ctx) => {
+    const threadId = ctx.message?.message_thread_id;
+    if (threadId) {
+      await ctx.reply(`Topic ID: ${threadId}`, topicParams(ctx));
+    } else {
+      await ctx.reply("This chat has no topic (not a forum or General topic).", topicParams(ctx));
+    }
+  });
+
   bot.command("start", async (ctx) => {
     const firstName = ctx.from?.first_name || "there";
     await ctx.reply(
-      `Hi ${firstName}! I'm a bridge to Claude Code — an AI that can read, write, and run code in a workspace on the server.\n\nSend any message and I'll pass it to Claude. You'll see a live status while it works.\n\nTry: "What files are in the workspace?"\n\n${helpText}`
+      `Hi ${firstName}! I'm a bridge to Claude Code — an AI that can read, write, and run code in a workspace on the server.\n\nSend any message and I'll pass it to Claude. You'll see a live status while it works.\n\nTry: "What files are in the workspace?"\n\n${helpText}`,
+      topicParams(ctx)
     );
   });
 
   bot.command("help", async (ctx) => {
-    await ctx.reply(helpText);
+    await ctx.reply(helpText, topicParams(ctx));
   });
 
   async function runBeforeClaudeHooks(
@@ -195,42 +224,48 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     if (!userId || !chatId) return;
     if (!message || !message.trim()) return;
 
-    // Concurrency guard: one message at a time per user
-    if (busy.has(userId)) {
+    // In group chats, use chatId as session key so all users share one conversation.
+    // In private chats, use userId as before.
+    const isGroup = ctx.chat?.type !== "private";
+    const sessionKey = isGroup ? chatId : userId;
+
+    // Concurrency guard: one message at a time per session
+    if (busy.has(sessionKey)) {
       await ctx.reply(
-        "Still working on your previous message. Send /cancel to stop, or wait for the response."
+        "Still working on your previous message. Send /cancel to stop, or wait for the response.",
+        topicParams(ctx)
       );
       return;
     }
 
-    busy.add(userId);
+    busy.add(sessionKey);
 
     // Give modules a chance to deny/transform the message before starting Claude.
     const before = await runBeforeClaudeHooks(ctx, message);
     if (!before.allowed) {
       if (before.reply) {
         try {
-          await ctx.reply(before.reply);
+          await ctx.reply(before.reply, topicParams(ctx));
         } catch {
           // Ignore
         }
       }
-      busy.delete(userId);
+      busy.delete(sessionKey);
       return;
     }
 
     const finalMessage = before.message;
     if (!finalMessage || !finalMessage.trim()) {
-      busy.delete(userId);
+      busy.delete(sessionKey);
       return;
     }
 
     // Send placeholder message
     let statusMsg;
     try {
-      statusMsg = await ctx.reply("💭 Thinking  ⏱ 0:00");
+      statusMsg = await ctx.reply("💭 Thinking  ⏱ 0:00", topicParams(ctx));
     } catch {
-      busy.delete(userId);
+      busy.delete(sessionKey);
       return;
     }
 
@@ -248,7 +283,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
       const { promise, child } = runClaude({
         config,
         sessionStore,
-        userId,
+        userId: sessionKey,
         message: finalMessage,
         onEvent: activity.onEvent,
       });
@@ -260,12 +295,12 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         activity,
         canceled: false,
       };
-      running.set(userId, job);
+      running.set(sessionKey, job);
 
       processTracker.register(child);
 
       const result = await promise;
-      if (running.get(userId) === job) running.delete(userId);
+      if (running.get(sessionKey) === job) running.delete(sessionKey);
       activity.stop();
 
       // Delete the status message
@@ -292,7 +327,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         const footer = parts.length > 0 ? parts.join(" · ") : undefined;
         await sendMessage(ctx, finalResult.output, { footer });
       } else if (finalResult.success && !finalResult.output) {
-        await ctx.reply("Claude returned an empty response. Try rephrasing, or /clear to start fresh.");
+        await ctx.reply("Claude returned an empty response. Try rephrasing, or /clear to start fresh.", topicParams(ctx));
       } else {
         const safeError = finalResult.error
           ? sanitizeErrorForUser(finalResult.error, config.workspace, 400)
@@ -300,11 +335,11 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         const errorMsg = safeError
           ? `Something went wrong: ${safeError}`
           : "Something went wrong. Try again, or /clear to start fresh.";
-        await ctx.reply(errorMsg);
+        await ctx.reply(errorMsg, topicParams(ctx));
       }
     } catch (err) {
       activity.stop();
-      if (job && running.get(userId) === job) running.delete(userId);
+      if (job && running.get(sessionKey) === job) running.delete(sessionKey);
 
       // Try to update the status message with error
       try {
@@ -325,7 +360,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         // Give up on status message
       }
     } finally {
-      busy.delete(userId);
+      busy.delete(sessionKey);
     }
   }
 
@@ -384,11 +419,12 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     try {
       const names = await reloadModules();
       await ctx.reply(
-        `Reloaded: ${names.join(", ") || "(none)"}\n\nNote: new commands require bot restart.`
+        `Reloaded: ${names.join(", ") || "(none)"}\n\nNote: new commands require bot restart.`,
+        topicParams(ctx)
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await ctx.reply(`Reload failed: ${msg}`);
+      await ctx.reply(`Reload failed: ${msg}`, topicParams(ctx));
     }
   });
 
@@ -396,14 +432,16 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    const job = running.get(userId);
+    const isGroup = ctx.chat?.type !== "private";
+    const sessionKey = isGroup ? ctx.chat!.id : userId;
+    const job = running.get(sessionKey);
     if (!job) {
-      await ctx.reply("Nothing to cancel.");
+      await ctx.reply("Nothing to cancel.", topicParams(ctx));
       return;
     }
 
     if (job.canceled) {
-      await ctx.reply("Already cancelling...");
+      await ctx.reply("Already cancelling...", topicParams(ctx));
       return;
     }
 
@@ -430,7 +468,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     }
     setTimeout(() => {
       try {
-        if (running.get(userId) === job) {
+        if (running.get(sessionKey) === job) {
           job.child.kill("SIGKILL");
         }
       } catch {
@@ -439,7 +477,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     }, 5000);
 
     if (!statusUpdated) {
-      await ctx.reply("Cancelling... (may take a few seconds)");
+      await ctx.reply("Cancelling... (may take a few seconds)", topicParams(ctx));
     }
   });
 
@@ -447,7 +485,9 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     const userId = ctx.from?.id;
     if (!userId) return;
 
-    const job = running.get(userId);
+    const isGroup = ctx.chat?.type !== "private";
+    const sessionKey = isGroup ? ctx.chat!.id : userId;
+    const job = running.get(sessionKey);
     if (job && !job.canceled) {
       job.canceled = true;
       job.activity.stop();
@@ -467,15 +507,15 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
       }
       setTimeout(() => {
         try {
-          if (running.get(userId) === job) job.child.kill("SIGKILL");
+          if (running.get(sessionKey) === job) job.child.kill("SIGKILL");
         } catch {
           // Ignore
         }
       }, 5000);
     }
 
-    sessionStore.resetSession(userId);
-    await ctx.reply("Conversation cleared. Claude won't remember previous messages.");
+    sessionStore.resetSession(sessionKey);
+    await ctx.reply("Conversation cleared. Claude won't remember previous messages.", topicParams(ctx));
   });
 
   // --- Text message handler ---
@@ -488,7 +528,13 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     // Skip commands (already handled above)
     if (text.startsWith("/")) return;
 
-    await dispatchToClaude(ctx, text);
+    // In group chats, prefix message with sender's name for context
+    const isGroup = ctx.chat?.type !== "private";
+    const finalText = isGroup
+      ? `[${ctx.from?.first_name || "Unknown"}]: ${text}`
+      : text;
+
+    await dispatchToClaude(ctx, finalText);
   });
 
   return bot;

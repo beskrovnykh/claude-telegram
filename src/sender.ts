@@ -93,8 +93,11 @@ export async function sendMessage(
   text: string,
   options?: { footer?: string }
 ): Promise<void> {
+  const threadId = ctx.message?.message_thread_id;
+  const topicOpts = threadId ? { message_thread_id: threadId } : {};
+
   if (!text.trim()) {
-    await ctx.reply("(empty response)");
+    await ctx.reply("(empty response)", topicOpts);
     return;
   }
 
@@ -116,10 +119,10 @@ export async function sendMessage(
 
     const formatted = toTelegramMarkdown(chunk);
     try {
-      await ctx.reply(formatted, { parse_mode: "MarkdownV2" });
+      await ctx.reply(formatted, { parse_mode: "MarkdownV2", ...topicOpts });
     } catch {
       // Fallback to plain text if MarkdownV2 fails
-      await ctx.reply(chunk);
+      await ctx.reply(chunk, topicOpts);
     }
   }
 }
