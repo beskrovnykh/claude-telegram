@@ -1,5 +1,21 @@
 import { spawn } from "node:child_process";
 /**
+ * Send a signal to the entire process group (child + all descendants).
+ * This mimics Ctrl+C behavior in a terminal.
+ */
+export function killProcessGroup(child, signal) {
+    try {
+        if (child.pid)
+            process.kill(-child.pid, signal);
+    }
+    catch {
+        try {
+            child.kill(signal);
+        }
+        catch { /* already exited */ }
+    }
+}
+/**
  * Build Claude CLI arguments.
  */
 function buildArgs(config, sessionId, isNew, message) {
@@ -104,6 +120,7 @@ export function runClaude(options) {
         cwd: config.workspace,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
     });
     const promise = new Promise((resolve) => {
         const events = [];
@@ -114,10 +131,10 @@ export function runClaude(options) {
         // Timeout
         const timer = setTimeout(() => {
             killed = true;
-            child.kill("SIGTERM");
+            killProcessGroup(child, "SIGTERM");
             setTimeout(() => {
                 if (!child.killed)
-                    child.kill("SIGKILL");
+                    killProcessGroup(child, "SIGKILL");
             }, 5000);
         }, config.timeout * 1000);
         // Parse stdout stream-json

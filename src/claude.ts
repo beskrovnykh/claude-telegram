@@ -2,6 +2,18 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { BotConfig, ClaudeResult, StreamJsonEvent } from "./types.js";
 import type { SessionStore } from "./session.js";
 
+/**
+ * Send a signal to the entire process group (child + all descendants).
+ * This mimics Ctrl+C behavior in a terminal.
+ */
+export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid) process.kill(-child.pid, signal);
+  } catch {
+    try { child.kill(signal); } catch { /* already exited */ }
+  }
+}
+
 export interface RunClaudeOptions {
   config: BotConfig;
   sessionStore: SessionStore;
@@ -143,6 +155,7 @@ export function runClaude(options: RunClaudeOptions): {
     cwd: config.workspace,
     env: { ...process.env },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
 
   const promise = new Promise<ClaudeResult>((resolve) => {
@@ -155,9 +168,9 @@ export function runClaude(options: RunClaudeOptions): {
     // Timeout
     const timer = setTimeout(() => {
       killed = true;
-      child.kill("SIGTERM");
+      killProcessGroup(child, "SIGTERM");
       setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
+        if (!child.killed) killProcessGroup(child, "SIGKILL");
       }, 5000);
     }, config.timeout * 1000);
 

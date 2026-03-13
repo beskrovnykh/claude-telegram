@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { Bot, type Context } from "grammy";
 import type { BotConfig, ClaudeResult } from "./types.js";
 import { SessionStore } from "./session.js";
-import { runClaude } from "./claude.js";
+import { runClaude, killProcessGroup } from "./claude.js";
 import { createActivityStatus } from "./activity.js";
 import { sendMessage } from "./sender.js";
 import { processTracker, setupGracefulShutdown } from "./shutdown.js";
@@ -463,7 +463,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
 
     // SIGINT first (like Ctrl+C) — lets Claude abort current tool gracefully.
     try {
-      job.child.kill("SIGINT");
+      killProcessGroup(job.child, "SIGINT");
     } catch {
       // Ignore
     }
@@ -471,7 +471,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     setTimeout(() => {
       try {
         if (running.get(sessionKey) === job) {
-          job.child.kill("SIGTERM");
+          killProcessGroup(job.child, "SIGTERM");
         }
       } catch {
         // Ignore
@@ -481,7 +481,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
     setTimeout(() => {
       try {
         if (running.get(sessionKey) === job) {
-          job.child.kill("SIGKILL");
+          killProcessGroup(job.child, "SIGKILL");
         }
       } catch {
         // Ignore
@@ -513,7 +513,7 @@ export function createBot(config: BotConfig, options: CreateBotOptions = {}): Bo
         // Ignore
       }
       try {
-        job.child.kill("SIGINT");
+        killProcessGroup(job.child, "SIGINT");
       } catch {
         // Ignore
       }

@@ -1,6 +1,6 @@
 import { Bot } from "grammy";
 import { SessionStore } from "./session.js";
-import { runClaude } from "./claude.js";
+import { runClaude, killProcessGroup } from "./claude.js";
 import { createActivityStatus } from "./activity.js";
 import { sendMessage } from "./sender.js";
 import { processTracker, setupGracefulShutdown } from "./shutdown.js";
@@ -390,7 +390,7 @@ export function createBot(config, options = {}) {
         }
         // SIGINT first (like Ctrl+C) — lets Claude abort current tool gracefully.
         try {
-            job.child.kill("SIGINT");
+            killProcessGroup(job.child, "SIGINT");
         }
         catch {
             // Ignore
@@ -399,7 +399,7 @@ export function createBot(config, options = {}) {
         setTimeout(() => {
             try {
                 if (running.get(sessionKey) === job) {
-                    job.child.kill("SIGTERM");
+                    killProcessGroup(job.child, "SIGTERM");
                 }
             }
             catch {
@@ -410,7 +410,7 @@ export function createBot(config, options = {}) {
         setTimeout(() => {
             try {
                 if (running.get(sessionKey) === job) {
-                    job.child.kill("SIGKILL");
+                    killProcessGroup(job.child, "SIGKILL");
                 }
             }
             catch {
@@ -438,7 +438,7 @@ export function createBot(config, options = {}) {
                 // Ignore
             }
             try {
-                job.child.kill("SIGINT");
+                killProcessGroup(job.child, "SIGINT");
             }
             catch {
                 // Ignore
