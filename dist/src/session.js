@@ -6,6 +6,7 @@ export class SessionStore {
     filePath;
     sessions;
     namespace;
+    freshSessions = new Set();
     constructor(workspace, namespace) {
         const dataDir = join(workspace, "data", ".claude-telegram");
         this.filePath = join(dataDir, "sessions.json");
@@ -53,7 +54,7 @@ export class SessionStore {
         const key = String(userId);
         const existing = this.sessions[key];
         if (existing) {
-            return { sessionId: existing, isNew: false };
+            return { sessionId: existing, isNew: this.freshSessions.has(key) };
         }
         // Deterministic first session ID
         let sessionId;
@@ -70,12 +71,19 @@ export class SessionStore {
         return { sessionId, isNew: true };
     }
     /**
+     * Mark a fresh session as confirmed (no longer new).
+     */
+    confirmSession(userId) {
+        this.freshSessions.delete(String(userId));
+    }
+    /**
      * Reset session for a user (generates new random UUID).
      */
     resetSession(userId) {
         const key = String(userId);
         const sessionId = uuidv4();
         this.sessions[key] = sessionId;
+        this.freshSessions.add(key);
         this.save();
         return sessionId;
     }

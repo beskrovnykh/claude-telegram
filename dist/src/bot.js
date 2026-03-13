@@ -388,12 +388,25 @@ export function createBot(config, options = {}) {
         catch {
             // Ignore
         }
+        // SIGINT first (like Ctrl+C) — lets Claude abort current tool gracefully.
         try {
-            job.child.kill("SIGTERM");
+            job.child.kill("SIGINT");
         }
         catch {
             // Ignore
         }
+        // SIGTERM fallback after 10s if SIGINT wasn't enough.
+        setTimeout(() => {
+            try {
+                if (running.get(sessionKey) === job) {
+                    job.child.kill("SIGTERM");
+                }
+            }
+            catch {
+                // Ignore
+            }
+        }, 10_000);
+        // SIGKILL last resort after 15s.
         setTimeout(() => {
             try {
                 if (running.get(sessionKey) === job) {
@@ -403,7 +416,7 @@ export function createBot(config, options = {}) {
             catch {
                 // Ignore
             }
-        }, 5000);
+        }, 15_000);
         if (!statusUpdated) {
             await ctx.reply("Cancelling... (may take a few seconds)", topicParams(ctx));
         }
@@ -425,11 +438,20 @@ export function createBot(config, options = {}) {
                 // Ignore
             }
             try {
-                job.child.kill("SIGTERM");
+                job.child.kill("SIGINT");
             }
             catch {
                 // Ignore
             }
+            setTimeout(() => {
+                try {
+                    if (running.get(sessionKey) === job)
+                        job.child.kill("SIGTERM");
+                }
+                catch {
+                    // Ignore
+                }
+            }, 10_000);
             setTimeout(() => {
                 try {
                     if (running.get(sessionKey) === job)
@@ -438,7 +460,7 @@ export function createBot(config, options = {}) {
                 catch {
                     // Ignore
                 }
-            }, 5000);
+            }, 15_000);
         }
         sessionStore.resetSession(sessionKey);
         await ctx.reply("Conversation cleared. Claude won't remember previous messages.", topicParams(ctx));

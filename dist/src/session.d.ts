@@ -2,6 +2,7 @@ export declare class SessionStore {
     private filePath;
     private sessions;
     private namespace?;
+    private freshSessions;
     constructor(workspace: string, namespace?: string);
     private load;
     private save;
@@ -13,6 +14,10 @@ export declare class SessionStore {
         sessionId: string;
         isNew: boolean;
     };
+    /**
+     * Mark a fresh session as confirmed (no longer new).
+     */
+    confirmSession(userId: number): void;
     /**
      * Reset session for a user (generates new random UUID).
      */
